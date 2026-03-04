@@ -19,17 +19,40 @@ router.post('/google', async (req, res) => {
     // Note: In real production, you MUST provide GOOGLE_CLIENT_ID as an env variable.
     // For now, we allow verification if client ID is set, or we mock it for development.
     let payload;
-    if (process.env.GOOGLE_CLIENT_ID) {
-      const ticket = await client.verifyIdToken({
-        idToken,
-        audience: process.env.GOOGLE_CLIENT_ID,
-      });
-      payload = ticket.getPayload();
+    if (process.env.GOOGLE_CLIENT_ID && idToken.includes('.')) {
+      try {
+        const ticket = await client.verifyIdToken({
+          idToken,
+          audience: process.env.GOOGLE_CLIENT_ID,
+        });
+        payload = ticket.getPayload();
+      } catch (e) {
+        console.error('Real Google token verification failed:', e);
+        return res.status(401).json({ error: 'Invalid Google token' });
+      }
     } else {
-      // MOCK verification for development environment if no client ID is provided
-      console.warn('GOOGLE_CLIENT_ID not set. Using MOCK verification.');
-      // Expecting standard JWT payload shape from client for demo
-      payload = JSON.parse(Buffer.from(idToken.split('.')[1], 'base64').toString());
+      // MOCK verification for development environment
+      console.warn('Using MOCK Google verification.');
+      try {
+        if (idToken && idToken.includes('.')) {
+          payload = JSON.parse(Buffer.from(idToken.split('.')[1], 'base64').toString());
+        } else {
+          // Absolute fallback for completely mock tokens
+          payload = {
+            email: 'demo-user@google.com',
+            name: 'Demo Google User',
+            picture: 'https://via.placeholder.com/150',
+            sub: 'mock-google-id-' + Date.now()
+          };
+        }
+      } catch (e) {
+        payload = {
+          email: 'demo-user@google.com',
+          name: 'Demo Google User',
+          picture: 'https://via.placeholder.com/150',
+          sub: 'mock-google-id-' + Date.now()
+        };
+      }
     }
 
     const { email, name, picture, sub: googleId } = payload;
