@@ -179,14 +179,11 @@ router.put('/:id/complete', authenticateToken, (req, res) => {
       .run(req.params.id);
 
     // If there's a driver, credit their earnings
-    // We'll search driver by name for now, though driver_id would be better
-    const driver = db.prepare('SELECT id FROM drivers WHERE user_id = (SELECT id FROM users WHERE name = ? LIMIT 1)').get(ride.driver_name);
-    
-    if (driver) {
+    if (ride.driver_id) {
       db.prepare('INSERT INTO earnings (driver_id, amount, ride_id, type) VALUES (?, ?, ?, ?)')
-        .run(driver.id, ride.fare, ride.id, 'ride');
+        .run(ride.driver_id, ride.fare, ride.id, 'ride');
       
-      db.prepare('UPDATE drivers SET total_rides = total_rides + 1 WHERE id = ?').run(driver.id);
+      db.prepare('UPDATE drivers SET total_rides = total_rides + 1 WHERE id = ?').run(ride.driver_id);
     }
 
     const io = req.app.get('io');

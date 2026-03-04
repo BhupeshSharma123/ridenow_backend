@@ -56,9 +56,9 @@ router.post('/register', authenticateToken, (req, res) => {
 
     const result = db.prepare(
       'INSERT INTO drivers (user_id, status) VALUES (?, ?)'
-    ).run(req.userId, 'pending');
+    ).run(req.userId, 'approved');
 
-    res.status(201).json({ id: Number(result.lastInsertRowid), status: 'pending' });
+    res.status(201).json({ id: Number(result.lastInsertRowid), status: 'approved' });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
