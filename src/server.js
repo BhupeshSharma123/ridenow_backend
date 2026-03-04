@@ -93,7 +93,9 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString(),
   });
 });
-
+app.get("/", (req, res) => {
+  res.send("RIDENOW Backend Running 🚀");
+});
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
