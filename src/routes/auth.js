@@ -5,7 +5,7 @@ const db = require('../database');
 const { generateToken } = require('../middleware/auth');
 const { OAuth2Client } = require('google-auth-library');
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-const { sendVerificationEmail, sendResetPasswordEmail } = require('../utils/email');
+const { sendOtpEmail, sendResetPasswordEmail } = require('../utils/email');
 
 const router = express.Router();
 
@@ -127,19 +127,13 @@ router.post('/register', async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(password, salt);
 
-    // Generate verification token
-    const verificationToken = crypto.randomBytes(32).toString('hex');
-
-    // Insert user
+    // Insert user (without OTP initially)
     const result = db.prepare(
-      'INSERT INTO users (name, email, phone, password_hash, verification_token, is_verified) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(name, email, phone || '', passwordHash, verificationToken, 0);
+      'INSERT INTO users (name, email, phone, password_hash, is_verified) VALUES (?, ?, ?, ?, ?)'
+    ).run(name, email, phone || '', passwordHash, 0);
 
     const userId = Number(result.lastInsertRowid);
     const token = generateToken(userId);
-
-    // Send verification email
-    await sendVerificationEmail(email, verificationToken);
 
     // Create default payment methods
     db.prepare(
@@ -156,9 +150,10 @@ router.post('/register', async (req, res) => {
     ).run(userId, 'Work', 'work', 'Set your work address', 0, 0);
 
     res.status(201).json({
+      success: true,
       token,
       user: { id: userId, name, email, phone: phone || '', is_verified: false },
-      message: 'Registration successful. Please verify your email.'
+      message: 'Registration successful. Please verify your email with OTP.'
     });
   } catch (err) {
     console.error('Register error:', err);
@@ -166,41 +161,90 @@ router.post('/register', async (req, res) => {
   }
 });
 
-// Resend Verification
-router.post('/resend-verification', async (req, res) => {
+// Send OTP
+router.post('/send-otp', async (req, res) => {
   try {
     const { email } = req.body;
-    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    if (user.is_verified) return res.status(400).json({ error: 'User already verified' });
-
-    const verificationToken = user.verification_token || crypto.randomBytes(32).toString('hex');
-    if (!user.verification_token) {
-      db.prepare('UPDATE users SET verification_token = ? WHERE id = ?').run(verificationToken, user.id);
+    
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
     }
 
-    await sendVerificationEmail(email, verificationToken);
-    res.json({ message: 'Verification email sent' });
+    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (user.is_verified) {
+      return res.status(400).json({ error: 'Email already verified' });
+    }
+
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiry = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 minutes
+
+    // Save OTP to database
+    db.prepare('UPDATE users SET otp_code = ?, otp_expiry = ? WHERE id = ?')
+      .run(otp, expiry, user.id);
+
+    // Send OTP email
+    await sendOtpEmail(email, otp);
+
+    console.log(`OTP for ${email}: ${otp}`); // For development/testing
+
+    res.json({ 
+      success: true,
+      message: 'OTP sent to your email' 
+    });
   } catch (err) {
-    res.status(500).json({ error: 'Server error' });
+    console.error('Send OTP error:', err);
+    res.status(500).json({ error: 'Server error sending OTP' });
   }
 });
 
-// Verify Email
-router.get('/verify-email/:token', async (req, res) => {
+// Verify OTP
+router.post('/verify-otp', async (req, res) => {
   try {
-    const { token } = req.params;
-    const user = db.prepare('SELECT * FROM users WHERE verification_token = ?').get(token);
+    const { email, otp } = req.body;
 
-    if (!user) {
-      return res.status(400).send('<h1>Invalid or expired verification token</h1>');
+    if (!email || !otp) {
+      return res.status(400).json({ error: 'Email and OTP are required' });
     }
 
-    db.prepare('UPDATE users SET is_verified = 1, verification_token = NULL WHERE id = ?').run(user.id);
+    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
-    res.send('<h1>Email Verified!</h1><p>You can now log in to the app.</p>');
+    if (user.is_verified) {
+      return res.status(400).json({ error: 'Email already verified' });
+    }
+
+    // Check if OTP exists and is not expired
+    if (!user.otp_code || !user.otp_expiry) {
+      return res.status(400).json({ error: 'No OTP found. Please request a new one.' });
+    }
+
+    if (new Date(user.otp_expiry) < new Date()) {
+      return res.status(400).json({ error: 'OTP has expired. Please request a new one.' });
+    }
+
+    // Verify OTP
+    if (user.otp_code !== otp) {
+      return res.status(400).json({ error: 'Invalid OTP' });
+    }
+
+    // Mark user as verified and clear OTP
+    db.prepare('UPDATE users SET is_verified = 1, otp_code = NULL, otp_expiry = NULL WHERE id = ?')
+      .run(user.id);
+
+    res.json({ 
+      success: true,
+      message: 'Email verified successfully' 
+    });
   } catch (err) {
-    res.status(500).send('<h1>Server error</h1>');
+    console.error('Verify OTP error:', err);
+    res.status(500).json({ error: 'Server error verifying OTP' });
   }
 });
 
@@ -268,6 +312,7 @@ router.post('/login', async (req, res) => {
     const token = generateToken(user.id);
 
     res.json({
+      success: true,
       token,
       user: {
         id: user.id,

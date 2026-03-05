@@ -16,6 +16,11 @@ db.exec(`
     password_hash TEXT NOT NULL,
     avatar_url TEXT,
     rating REAL DEFAULT 5.0,
+    is_verified INTEGER DEFAULT 0,
+    otp_code TEXT,
+    otp_expiry DATETIME,
+    reset_token TEXT,
+    reset_token_expiry DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
