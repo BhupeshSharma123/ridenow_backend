@@ -185,6 +185,42 @@ router.get('/users', authenticateAdmin, (req, res) => {
   }
 });
 
+// Delete user
+router.delete('/users/:id', authenticateAdmin, (req, res) => {
+  try {
+    const userId = req.params.id;
+
+    // Check if user exists
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Delete user's rides
+    db.prepare('DELETE FROM rides WHERE user_id = ?').run(userId);
+    
+    // Delete user's saved locations
+    db.prepare('DELETE FROM saved_locations WHERE user_id = ?').run(userId);
+    
+    // Delete user's recent locations
+    db.prepare('DELETE FROM recent_locations WHERE user_id = ?').run(userId);
+    
+    // Delete user's payment methods
+    db.prepare('DELETE FROM payment_methods WHERE user_id = ?').run(userId);
+
+    // Delete the user
+    db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+
+    res.json({
+      success: true,
+      message: 'User deleted successfully'
+    });
+  } catch (err) {
+    console.error('Delete user error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Get all drivers with pagination
 router.get('/drivers', authenticateAdmin, (req, res) => {
   try {
@@ -196,7 +232,9 @@ router.get('/drivers', authenticateAdmin, (req, res) => {
 
     let query = `
       SELECT d.*, u.name, u.email, u.phone, u.rating,
-             v.type as vehicle_type, v.model, v.number as plate
+             v.type as vehicle_type, v.model as vehicle_model, 
+             v.number as vehicle_plate, v.color as vehicle_color, v.year as vehicle_year,
+             d.is_online as is_available
       FROM drivers d
       JOIN users u ON d.user_id = u.id
       LEFT JOIN vehicles v ON d.id = v.driver_id
@@ -253,7 +291,7 @@ router.put('/drivers/:id/status', authenticateAdmin, (req, res) => {
     const { status, rejection_reason } = req.body;
     const driverId = req.params.id;
 
-    if (!['approved', 'rejected'].includes(status)) {
+    if (!['approved', 'rejected', 'pending'].includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
 
@@ -285,6 +323,48 @@ router.put('/drivers/:id/status', authenticateAdmin, (req, res) => {
   }
 });
 
+// Delete driver
+router.delete('/drivers/:id', authenticateAdmin, (req, res) => {
+  try {
+    const driverId = req.params.id;
+
+    // Check if driver exists
+    const driver = db.prepare('SELECT * FROM drivers WHERE id = ?').get(driverId);
+    if (!driver) {
+      return res.status(404).json({ error: 'Driver not found' });
+    }
+
+    // Delete driver's rides
+    db.prepare('DELETE FROM rides WHERE driver_id = ?').run(driverId);
+    
+    // Delete driver's earnings
+    db.prepare('DELETE FROM earnings WHERE driver_id = ?').run(driverId);
+    
+    // Delete driver's incentives
+    db.prepare('DELETE FROM incentives WHERE driver_id = ?').run(driverId);
+    
+    // Delete driver's documents
+    db.prepare('DELETE FROM driver_documents WHERE driver_id = ?').run(driverId);
+    
+    // Delete driver's bank details
+    db.prepare('DELETE FROM driver_bank_details WHERE driver_id = ?').run(driverId);
+    
+    // Delete driver's vehicle
+    db.prepare('DELETE FROM vehicles WHERE driver_id = ?').run(driverId);
+
+    // Delete the driver
+    db.prepare('DELETE FROM drivers WHERE id = ?').run(driverId);
+
+    res.json({
+      success: true,
+      message: 'Driver deleted successfully'
+    });
+  } catch (err) {
+    console.error('Delete driver error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Get all rides with pagination and filters
 router.get('/rides', authenticateAdmin, (req, res) => {
   try {
@@ -292,8 +372,9 @@ router.get('/rides', authenticateAdmin, (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 20, 100);
     const offset = (page - 1) * limit;
     const status = req.query.status;
-    const startDate = req.query.start_date;
-    const endDate = req.query.end_date;
+    const search = req.query.search;
+    const dateFrom = req.query.dateFrom;
+    const dateTo = req.query.dateTo;
 
     let query = `
       SELECT r.*, u.name as passenger_name, u.phone as passenger_phone,
@@ -312,14 +393,21 @@ router.get('/rides', authenticateAdmin, (req, res) => {
       params.push(status);
     }
 
-    if (startDate) {
-      conditions.push('DATE(r.created_at) >= ?');
-      params.push(startDate);
+    if (search) {
+      countQuery += ' LEFT JOIN users u ON r.user_id = u.id LEFT JOIN drivers d ON r.driver_id = d.id LEFT JOIN users du ON d.user_id = du.id';
+      conditions.push('(u.name LIKE ? OR du.name LIKE ?)');
+      const searchParam = `%${search}%`;
+      params.push(searchParam, searchParam);
     }
 
-    if (endDate) {
+    if (dateFrom) {
+      conditions.push('DATE(r.created_at) >= ?');
+      params.push(dateFrom);
+    }
+
+    if (dateTo) {
       conditions.push('DATE(r.created_at) <= ?');
-      params.push(endDate);
+      params.push(dateTo);
     }
 
     if (conditions.length > 0) {
@@ -350,30 +438,25 @@ router.get('/rides', authenticateAdmin, (req, res) => {
   }
 });
 
-// Get ride analytics
-router.get('/analytics/rides', authenticateAdmin, (req, res) => {
+// Get analytics
+router.get('/analytics', authenticateAdmin, (req, res) => {
   try {
-    const days = parseInt(req.query.days) || 7;
+    const range = req.query.range || '7days';
+    let days = 7;
+    if (range === '30days') days = 30;
+    if (range === '90days') days = 90;
 
-    // Daily ride counts for the last N days
+    // Daily ride counts
     const dailyRides = db.prepare(`
-      SELECT DATE(created_at) as date, COUNT(*) as count
+      SELECT DATE(created_at) as date, COUNT(*) as rides
       FROM rides
       WHERE created_at >= datetime('now', '-${days} days')
       GROUP BY DATE(created_at)
       ORDER BY date
     `).all();
 
-    // Ride status distribution
-    const statusDistribution = db.prepare(`
-      SELECT status, COUNT(*) as count
-      FROM rides
-      WHERE created_at >= datetime('now', '-${days} days')
-      GROUP BY status
-    `).all();
-
     // Revenue by day
-    const dailyRevenue = db.prepare(`
+    const revenueData = db.prepare(`
       SELECT DATE(created_at) as date, COALESCE(SUM(fare), 0) as revenue
       FROM rides
       WHERE status = 'completed' AND created_at >= datetime('now', '-${days} days')
@@ -381,9 +464,17 @@ router.get('/analytics/rides', authenticateAdmin, (req, res) => {
       ORDER BY date
     `).all();
 
+    // Ride status distribution
+    const statusDistribution = db.prepare(`
+      SELECT status as name, COUNT(*) as value
+      FROM rides
+      WHERE created_at >= datetime('now', '-${days} days')
+      GROUP BY status
+    `).all();
+
     // Top routes
     const topRoutes = db.prepare(`
-      SELECT pickup_address, dest_address, COUNT(*) as count
+      SELECT pickup_address as pickup, dest_address as destination, COUNT(*) as count
       FROM rides
       WHERE created_at >= datetime('now', '-${days} days')
       GROUP BY pickup_address, dest_address
@@ -391,14 +482,36 @@ router.get('/analytics/rides', authenticateAdmin, (req, res) => {
       LIMIT 10
     `).all();
 
+    // Summary stats
+    const totalRides = db.prepare(`
+      SELECT COUNT(*) as count FROM rides 
+      WHERE created_at >= datetime('now', '-${days} days')
+    `).get();
+
+    const totalRevenue = db.prepare(`
+      SELECT COALESCE(SUM(fare), 0) as revenue FROM rides 
+      WHERE status = 'completed' AND created_at >= datetime('now', '-${days} days')
+    `).get();
+
+    const activeUsers = db.prepare(`
+      SELECT COUNT(DISTINCT user_id) as count FROM rides 
+      WHERE created_at >= datetime('now', '-${days} days')
+    `).get();
+
+    const avgFare = totalRides.count > 0 
+      ? (totalRevenue.revenue / totalRides.count).toFixed(2) 
+      : '0.00';
+
     res.json({
       success: true,
-      analytics: {
-        dailyRides,
-        statusDistribution,
-        dailyRevenue,
-        topRoutes
-      }
+      dailyRides,
+      revenueData,
+      statusDistribution,
+      topRoutes,
+      totalRides: totalRides.count,
+      totalRevenue: totalRevenue.revenue.toFixed(2),
+      activeUsers: activeUsers.count,
+      avgFare
     });
   } catch (err) {
     console.error('Analytics error:', err);
@@ -458,24 +571,24 @@ router.put('/documents/:id/status', authenticateAdmin, (req, res) => {
   }
 });
 
-// System settings
+// Get system settings
 router.get('/settings', authenticateAdmin, (req, res) => {
   try {
-    // Mock settings - in real app, these would be in a settings table
+    const settingsRows = db.prepare('SELECT key, value FROM system_settings').all();
+    
     const settings = {
-      app_name: 'RIDENOW',
-      commission_rate: 20, // 20%
       base_fare: 35,
       per_km_rate: 15,
       per_minute_rate: 2,
-      surge_multiplier: 1.5,
-      max_search_radius: 10, // km
-      ride_timeout: 300, // 5 minutes
+      minimum_fare: 50,
       cancellation_fee: 50,
-      driver_approval_required: true,
-      email_notifications: true,
-      sms_notifications: false
+      commission_rate: 20
     };
+
+    // Override with database values if they exist
+    settingsRows.forEach(row => {
+      settings[row.key] = parseFloat(row.value);
+    });
 
     res.json({
       success: true,
@@ -492,13 +605,20 @@ router.put('/settings', authenticateAdmin, (req, res) => {
   try {
     const settings = req.body;
     
-    // In a real app, you'd save these to a settings table
-    // For now, just return success
+    // Save each setting to database
+    const stmt = db.prepare(`
+      INSERT INTO system_settings (key, value, updated_at) 
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP
+    `);
+
+    for (const [key, value] of Object.entries(settings)) {
+      stmt.run(key, value.toString(), value.toString());
+    }
     
     res.json({
       success: true,
-      message: 'Settings updated successfully',
-      settings
+      message: 'Settings updated successfully'
     });
   } catch (err) {
     console.error('Update settings error:', err);
