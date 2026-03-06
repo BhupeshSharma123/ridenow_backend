@@ -13,6 +13,7 @@ const rideRoutes = require('./routes/rides');
 const locationRoutes = require('./routes/locations');
 const paymentRoutes = require('./routes/payments');
 const driverRoutes = require('./routes/drivers');
+const adminRoutes = require('./routes/admin');
 
 const app = express();
 const server = http.createServer(app);
@@ -35,6 +36,7 @@ app.use('/api/rides', rideRoutes);
 app.use('/api/locations', locationRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/drivers', driverRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Socket.IO Logic
 const activeUsers = new Map(); // userId -> socketId

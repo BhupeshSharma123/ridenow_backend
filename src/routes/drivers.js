@@ -216,4 +216,108 @@ router.get('/incentives', authenticateToken, (req, res) => {
   }
 });
 
+// Update driver location (for real-time tracking)
+router.put('/location', authenticateToken, (req, res) => {
+  try {
+    const { lat, lng } = req.body;
+
+    if (!lat || !lng) {
+      return res.status(400).json({ error: 'Latitude and longitude are required' });
+    }
+
+    const driver = db.prepare('SELECT id FROM drivers WHERE user_id = ?').get(req.userId);
+    if (!driver) {
+      return res.status(404).json({ error: 'Driver not found' });
+    }
+
+    db.prepare(`
+      UPDATE drivers 
+      SET current_lat = ?, current_lng = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(lat, lng, driver.id);
+
+    // Broadcast location to active rides
+    const activeRide = db.prepare(`
+      SELECT id, user_id FROM rides 
+      WHERE driver_id = ? AND status IN ('confirmed', 'in_progress')
+    `).get(driver.id);
+
+    if (activeRide) {
+      const io = req.app.get('io');
+      const activeUsers = req.app.get('activeUsers');
+      const passengerSocketId = activeUsers.get(activeRide.user_id);
+      
+      if (passengerSocketId) {
+        io.to(passengerSocketId).emit('driver_location_update', {
+          ride_id: activeRide.id,
+          location: { lat, lng }
+        });
+      }
+    }
+
+    res.json({ success: true, message: 'Location updated' });
+  } catch (err) {
+    console.error('Update location error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Get driver's ride history
+router.get('/rides', authenticateToken, (req, res) => {
+  try {
+    const driver = db.prepare('SELECT id FROM drivers WHERE user_id = ?').get(req.userId);
+    if (!driver) {
+      return res.status(404).json({ error: 'Driver not found' });
+    }
+
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+    const offset = (page - 1) * limit;
+    const status = req.query.status;
+
+    let query = `
+      SELECT r.*, u.name as passenger_name, u.phone as passenger_phone
+      FROM rides r
+      JOIN users u ON r.user_id = u.id
+      WHERE r.driver_id = ?
+    `;
+    let params = [driver.id];
+
+    if (status) {
+      query += ' AND r.status = ?';
+      params.push(status);
+    }
+
+    query += ' ORDER BY r.created_at DESC LIMIT ? OFFSET ?';
+    params.push(limit, offset);
+
+    const rides = db.prepare(query).all(...params);
+
+    // Get total count
+    let countQuery = 'SELECT COUNT(*) as count FROM rides WHERE driver_id = ?';
+    let countParams = [driver.id];
+
+    if (status) {
+      countQuery += ' AND status = ?';
+      countParams.push(status);
+    }
+
+    const total = db.prepare(countQuery).get(...countParams);
+
+    res.json({
+      success: true,
+      rides,
+      pagination: {
+        total: total.count,
+        page,
+        limit,
+        pages: Math.ceil(total.count / limit)
+      }
+    });
+  } catch (err) {
+    console.error('Driver rides error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 module.exports = router;

@@ -35,8 +35,9 @@ db.exec(`
     dest_lng REAL NOT NULL,
     driver_id INTEGER,
     status TEXT DEFAULT 'requested',
-    vehicle_type TEXT DEFAULT 'sedan',
+    vehicle_type TEXT DEFAULT 'car',
     fare REAL DEFAULT 0,
+    final_fare REAL,
     distance_km REAL DEFAULT 0,
     duration_mins INTEGER DEFAULT 0,
     driver_name TEXT,
@@ -44,9 +45,18 @@ db.exec(`
     driver_phone TEXT,
     vehicle_model TEXT,
     vehicle_plate TEXT,
+    passenger_rating INTEGER,
+    passenger_feedback TEXT,
+    cancelled_by TEXT,
+    cancelled_reason TEXT,
+    cancellation_fee REAL DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    confirmed_at DATETIME,
+    started_at DATETIME,
     completed_at DATETIME,
-    FOREIGN KEY (user_id) REFERENCES users(id)
+    cancelled_at DATETIME,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (driver_id) REFERENCES drivers(id)
   );
 
   CREATE TABLE IF NOT EXISTS saved_locations (
@@ -149,6 +159,23 @@ db.exec(`
     reward REAL DEFAULT 0,
     is_completed INTEGER DEFAULT 0,
     FOREIGN KEY (driver_id) REFERENCES drivers(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS admins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    name TEXT NOT NULL,
+    role TEXT DEFAULT 'admin',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS system_settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT UNIQUE NOT NULL,
+    value TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
 
