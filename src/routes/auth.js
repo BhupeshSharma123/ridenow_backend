@@ -5,7 +5,7 @@ const db = require('../database');
 const { generateToken } = require('../middleware/auth');
 const { OAuth2Client } = require('google-auth-library');
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-const { sendOtpEmail, sendResetPasswordEmail } = require('../utils/email');
+const { sendOtpEmail, sendResetPasswordEmail } = require('../utils/email-improved');
 
 const router = express.Router();
 
@@ -183,18 +183,30 @@ router.post('/send-otp', async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiry = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 minutes
 
-    // Save OTP to database
+    // Save OTP to database FIRST
     db.prepare('UPDATE users SET otp_code = ?, otp_expiry = ? WHERE id = ?')
       .run(otp, expiry, user.id);
 
-    // Send OTP email
-    await sendOtpEmail(email, otp);
+    console.log(`📱 OTP generated for ${email}: ${otp}`); // For development/testing
 
-    console.log(`OTP for ${email}: ${otp}`); // For development/testing
+    // Send OTP email asynchronously (don't wait for it)
+    sendOtpEmail(email, otp)
+      .then(result => {
+        if (result.success) {
+          console.log(`✅ OTP email sent successfully to ${email}`);
+        } else {
+          console.error(`❌ Failed to send OTP email to ${email}:`, result.error);
+        }
+      })
+      .catch(err => {
+        console.error(`❌ Error sending OTP email to ${email}:`, err);
+      });
 
+    // Respond immediately (don't wait for email)
     res.json({ 
       success: true,
-      message: 'OTP sent to your email' 
+      message: 'OTP sent to your email',
+      otp: process.env.NODE_ENV === 'development' ? otp : undefined // Only in dev
     });
   } catch (err) {
     console.error('Send OTP error:', err);
